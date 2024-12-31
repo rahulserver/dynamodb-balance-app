@@ -6,6 +6,8 @@ const dynamoDb = new AWS.DynamoDB.DocumentClient({
 });
 
 const BALANCE_TABLE = 'UserBalances';
+const DEFAULT_BALANCE = 100;
+
 export const getCurrentBalance = async (input: {
   userId: string;
 }): Promise<number> => {
@@ -19,8 +21,6 @@ export const getCurrentBalance = async (input: {
     TableName: BALANCE_TABLE,
     Key: { userId },
   };
-
-  const DEFAULT_BALANCE = 0;
 
   const result = await dynamoDb.get(params).promise();
   return result.Item?.balance ?? DEFAULT_BALANCE;

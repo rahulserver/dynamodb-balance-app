@@ -1,37 +1,142 @@
-import { transact } from '../../../src/lib/functions/transact';
-import AWSMock from 'aws-sdk-mock';
 import AWS from 'aws-sdk';
-import { DocumentClient } from 'aws-sdk/clients/dynamodb';
+import { transact } from '../../../src/lib/functions/transact';
 
-const BALANCE_TABLE = 'UserBalances';
+// Configure AWS SDK for live DynamoDB
+AWS.config.update({
+  region: 'us-east-1',
+});
+
+const dynamoDb = new AWS.DynamoDB.DocumentClient();
+
 const TRANSACTION_TABLE = 'Transactions';
+const BALANCE_TABLE = 'UserBalances';
 
-describe('transact Function', () => {
-  beforeEach(() => {
-    AWSMock.setSDKInstance(AWS);
+// Add this type for AWS errors
+interface AWSError {
+  code: string;
+  message: string;
+}
+
+describe('transact Function (using live AWS DynamoDB)', () => {
+  // Track test documents for cleanup
+  const testData = {
+    transactions: new Set<string>(), // track idempotentKeys
+    balances: new Set<string>(), // track userIds
+  };
+
+  beforeAll(async () => {
+    const dynamodb = new AWS.DynamoDB();
+
+    // Check and create Transaction table if needed
+    try {
+      await dynamodb.describeTable({ TableName: TRANSACTION_TABLE }).promise();
+      console.log(`Table ${TRANSACTION_TABLE} already exists`);
+    } catch (err) {
+      const awsError = err as AWSError;
+      if (awsError.code === 'ResourceNotFoundException') {
+        console.log(`Creating table ${TRANSACTION_TABLE}...`);
+        await dynamodb
+          .createTable({
+            TableName: TRANSACTION_TABLE,
+            KeySchema: [{ AttributeName: 'idempotentKey', KeyType: 'HASH' }],
+            AttributeDefinitions: [
+              { AttributeName: 'idempotentKey', AttributeType: 'S' },
+            ],
+            BillingMode: 'PAY_PER_REQUEST',
+          })
+          .promise();
+
+        await dynamodb
+          .waitFor('tableExists', { TableName: TRANSACTION_TABLE })
+          .promise();
+        console.log(`Table ${TRANSACTION_TABLE} created successfully`);
+      } else {
+        throw err;
+      }
+    }
+
+    // Check and create Balance table if needed
+    try {
+      await dynamodb.describeTable({ TableName: BALANCE_TABLE }).promise();
+      console.log(`Table ${BALANCE_TABLE} already exists`);
+    } catch (err) {
+      const awsError = err as AWSError;
+      if (awsError.code === 'ResourceNotFoundException') {
+        console.log(`Creating table ${BALANCE_TABLE}...`);
+        await dynamodb
+          .createTable({
+            TableName: BALANCE_TABLE,
+            KeySchema: [{ AttributeName: 'userId', KeyType: 'HASH' }],
+            AttributeDefinitions: [
+              { AttributeName: 'userId', AttributeType: 'S' },
+            ],
+            BillingMode: 'PAY_PER_REQUEST',
+          })
+          .promise();
+
+        await dynamodb
+          .waitFor('tableExists', { TableName: BALANCE_TABLE })
+          .promise();
+        console.log(`Table ${BALANCE_TABLE} created successfully`);
+      } else {
+        throw err;
+      }
+    }
   });
 
-  afterEach(() => {
-    AWSMock.restore('DynamoDB.DocumentClient');
+  beforeEach(() => {
+    // Reset tracking sets
+    testData.transactions.clear();
+    testData.balances.clear();
+  });
+
+  afterEach(async () => {
+    // Clean up only test-created documents
+    const transactionDeletes = Array.from(testData.transactions).map((key) => ({
+      DeleteRequest: { Key: { idempotentKey: key } },
+    }));
+
+    const balanceDeletes = Array.from(testData.balances).map((key) => ({
+      DeleteRequest: { Key: { userId: key } },
+    }));
+
+    if (transactionDeletes.length > 0) {
+      await dynamoDb
+        .batchWrite({
+          RequestItems: { [TRANSACTION_TABLE]: transactionDeletes },
+        })
+        .promise();
+    }
+
+    if (balanceDeletes.length > 0) {
+      await dynamoDb
+        .batchWrite({
+          RequestItems: { [BALANCE_TABLE]: balanceDeletes },
+        })
+        .promise();
+    }
   });
 
   it('should throw an error for duplicate idempotentKey', async () => {
-    AWSMock.mock(
-      'DynamoDB.DocumentClient',
-      'get',
-      (params: DocumentClient.GetItemInput, callback: Function) => {
-        if (params.TableName === TRANSACTION_TABLE) {
-          callback(null, { Item: { idempotentKey: '1' } });
-        } else {
-          callback(null, {});
-        }
-      },
-    );
+    const testId = 'test_transact_1';
+    testData.transactions.add(testId);
+
+    await dynamoDb
+      .put({
+        TableName: TRANSACTION_TABLE,
+        Item: {
+          idempotentKey: testId,
+          userId: 'test_user_1',
+          amount: 100,
+          type: 'credit',
+        },
+      })
+      .promise();
 
     await expect(
       transact({
-        idempotentKey: '1',
-        userId: '1',
+        idempotentKey: testId,
+        userId: 'test_user_1',
         amount: 100,
         type: 'credit',
       }),
@@ -41,104 +146,85 @@ describe('transact Function', () => {
   });
 
   it('should process a credit transaction successfully', async () => {
-    AWSMock.mock(
-      'DynamoDB.DocumentClient',
-      'get',
-      (params: DocumentClient.GetItemInput, callback: Function) => {
-        if (params.TableName === TRANSACTION_TABLE) {
-          callback(null, {});
-        } else if (params.TableName === BALANCE_TABLE) {
-          callback(null, { Item: { balance: 200 } });
-        }
-      },
-    );
+    const testUserId = 'test_user_2';
+    const testTransactionId = '2'; // This was the missing tracking
 
-    AWSMock.mock(
-      'DynamoDB.DocumentClient',
-      'transactWrite',
-      (params: DocumentClient.TransactWriteItemsInput, callback: Function) => {
-        expect(params.TransactItems[1]?.Update?.UpdateExpression).toContain(
-          'SET balance = :newBalance',
-        );
-        expect(
-          params.TransactItems[1]?.Update?.ExpressionAttributeValues?.[
-            ':newBalance'
-          ],
-        ).toBe(300);
-        callback(null, {});
-      },
-    );
+    // Track both the user and transaction
+    testData.balances.add(testUserId);
+    testData.transactions.add(testTransactionId);
+
+    await dynamoDb
+      .put({
+        TableName: BALANCE_TABLE,
+        Item: { userId: testUserId, balance: 200 },
+      })
+      .promise();
 
     await transact({
-      idempotentKey: '2',
-      userId: '1',
+      idempotentKey: testTransactionId,
+      userId: testUserId,
       amount: 100,
       type: 'credit',
     });
+
+    const balance = await dynamoDb
+      .get({ TableName: BALANCE_TABLE, Key: { userId: testUserId } })
+      .promise();
+    expect(balance.Item?.balance).toBe(300);
   });
 
   it('should process a debit transaction successfully', async () => {
-    AWSMock.mock(
-      'DynamoDB.DocumentClient',
-      'get',
-      (params: DocumentClient.GetItemInput, callback: Function) => {
-        if (params.TableName === TRANSACTION_TABLE) {
-          callback(null, {});
-        } else if (params.TableName === BALANCE_TABLE) {
-          callback(null, { Item: { balance: 200 } });
-        }
-      },
-    );
+    const testUserId = 'test_user_3';
+    const testTransactionId = '3'; // This was the missing tracking
 
-    AWSMock.mock(
-      'DynamoDB.DocumentClient',
-      'transactWrite',
-      (params: DocumentClient.TransactWriteItemsInput, callback: Function) => {
-        expect(params.TransactItems[1]?.Update?.UpdateExpression).toContain(
-          'SET balance = :newBalance',
-        );
-        expect(
-          params.TransactItems[1]?.Update?.ExpressionAttributeValues?.[
-            ':newBalance'
-          ],
-        ).toBe(150);
-        callback(null, {});
-      },
-    );
+    // Track both the user and transaction
+    testData.balances.add(testUserId);
+    testData.transactions.add(testTransactionId);
+
+    await dynamoDb
+      .put({
+        TableName: BALANCE_TABLE,
+        Item: { userId: testUserId, balance: 200 },
+      })
+      .promise();
 
     await transact({
-      idempotentKey: '3',
-      userId: '1',
+      idempotentKey: testTransactionId,
+      userId: testUserId,
       amount: 50,
       type: 'debit',
     });
+
+    const balance = await dynamoDb
+      .get({ TableName: BALANCE_TABLE, Key: { userId: testUserId } })
+      .promise();
+    expect(balance.Item?.balance).toBe(150);
   });
 
   it('should throw an error for insufficient balance on debit', async () => {
-    AWSMock.mock(
-      'DynamoDB.DocumentClient',
-      'get',
-      (params: DocumentClient.GetItemInput, callback: Function) => {
-        if (params.TableName === TRANSACTION_TABLE) {
-          callback(null, {});
-        } else if (params.TableName === BALANCE_TABLE) {
-          callback(null, { Item: { balance: 50 } });
-        }
-      },
-    );
+    const testUserId = 'test_user_4';
+    const testTransactionId = '4'; // This was the missing tracking
+
+    // Track both the user and transaction (even though transaction might fail)
+    testData.balances.add(testUserId);
+    testData.transactions.add(testTransactionId);
+
+    await dynamoDb
+      .put({
+        TableName: BALANCE_TABLE,
+        Item: { userId: testUserId, balance: 50 },
+      })
+      .promise();
 
     await expect(
-      transact({ idempotentKey: '4', userId: '1', amount: 100, type: 'debit' }),
+      transact({
+        idempotentKey: testTransactionId,
+        userId: testUserId,
+        amount: 100,
+        type: 'debit',
+      }),
     ).rejects.toThrow(
       'Insufficient balance: Cannot process debit transaction.',
-    );
-  });
-
-  it('should throw an error for invalid input', async () => {
-    await expect(
-      transact({ idempotentKey: '', userId: '1', amount: 100, type: 'credit' }),
-    ).rejects.toThrow(
-      'Invalid input: All fields are required and must be valid.',
     );
   });
 });

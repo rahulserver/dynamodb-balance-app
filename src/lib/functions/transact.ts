@@ -38,10 +38,10 @@ export const transact = async (input: {
   };
 
   const transactionResult = await dynamoDb.get(transactionParams).promise();
-
   if (transactionResult.Item) {
     throw new Error(
-      'Duplicate transaction: This idempotentKey has already been used.',
+      'Duplicate transaction: This idempotentKey has already been used.' +
+        idempotentKey,
     );
   }
 
