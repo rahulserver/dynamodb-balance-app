@@ -1,50 +1,150 @@
-Welcome to our developer interview assessment task. This assessment will evaluate your ability to design and implement functions and technologies as TypeScript. Please read the instructions carefully and complete each task.
+# DynamoDB Balance Management System
 
-# Task 1: Retrieve Current Balance Function
+A TypeScript-based balance management system using AWS DynamoDB for managing user balances and transactions.
 
-You are tasked with creating a function in TypeScript that retrieves the current balance for a user. The function should:
+## Prerequisites
 
-- Retrieve the current balance for the specified user from a DynamoDB table.
-- Have a default balance of 100 USD.
+- Node.js (v14 or higher)
+- AWS Account
+- AWS CLI installed and configured
+- TypeScript knowledge
 
-The function input will be as followed:
+## AWS Setup
 
-```ts
-{
-	userId: '1'
-}
+1. **Configure AWS Credentials**
+   ```bash
+   aws configure
+   ```
+   You'll need to enter:
+   - AWS Access Key ID
+   - AWS Secret Access Key
+   - Default region (e.g., us-east-1)
+   - Default output format (json)
+
+2. **Create DynamoDB Tables**
+   
+   Create two tables in DynamoDB with the following specifications:
+
+   **UserBalances Table:**
+   - Table Name: UserBalances
+   - Partition Key: userId (String)
+   - No Sort Key needed
+
+   **Transactions Table:**
+   - Table Name: Transactions
+   - Partition Key: idempotentKey (String)
+   - No Sort Key needed
+
+   You can create these tables using AWS Console or AWS CLI:
+   ```bash
+   # Create UserBalances table
+   aws dynamodb create-table \
+     --table-name UserBalances \
+     --attribute-definitions AttributeName=userId,AttributeType=S \
+     --key-schema AttributeName=userId,KeyType=HASH \
+     --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
+
+   # Create Transactions table
+   aws dynamodb create-table \
+     --table-name Transactions \
+     --attribute-definitions AttributeName=idempotentKey,AttributeType=S \
+     --key-schema AttributeName=idempotentKey,KeyType=HASH \
+     --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
+   ```
+
+## Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd dynamodb-balance-app
+   ```
+
+2. **Install dependencies**
+   ```bash
+   npm install
+   ```
+
+## Configuration
+
+Update the AWS region in the following files if needed:
+- `src/lib/functions/getCurrentBalance.ts`
+- `src/lib/functions/transact.ts`
+
+## Running Tests
+
+```bash
+# Run all tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+
+# Run tests with coverage
+npm run test:coverage
 ```
 
-# Task 2: Transact Function
+## API Documentation
 
-You are also required to create a function in TypeScript for processing transactions. The transact function should:
+### getCurrentBalance Function
 
-- Handle credits & debits.
-- Process the transaction in an idempotent way to prevent duplicate transactions.
-- Make sure the user balance can't drop below 0.
-- Make sure no race conditions can happen.
+Retrieves the current balance for a user.
 
-The function input will be as followed:
-
-```ts
-{
-	idempotentKey: '1',
-	userId: '1',
-	amount: '10',
-	type: 'credit',
-}
+```typescript
+const balance = await getCurrentBalance({ userId: '123' });
 ```
 
-# Submission Guidelines:
+### transact Function
 
-Submit your solution as a GitHub repository or a ZIP file containing the code and any necessary configuration files.
+Processes a credit or debit transaction for a user.
 
-# Evaluation Criteria:
+```typescript
+await transact({
+  idempotentKey: 'unique-transaction-id',
+  userId: '123',
+  amount: 50,
+  type: 'credit' // or 'debit'
+});
+```
 
-Your solution will be evaluated based on the following criteria:
+## Original Requirements
 
-- Functionality: Do your functions fulfill the requirements outlined in each task?
-- Code Quality: Is your code well-structured, readable, and maintainable?
-- Error Handling: Have you implemented error handling and validation for input parameters?
-- Idempotency: Does your transact function handle idempotent keys correctly to prevent duplicate transactions?
-- Race Conditions: Does your transact function handle race conditions correctly.
+### Task 1: Retrieve Current Balance Function
+
+Function requirements:
+- Retrieve the current balance for the specified user from a DynamoDB table
+- Have a default balance of 100 USD
+
+### Task 2: Transact Function
+
+Function requirements:
+- Handle credits & debits
+- Process transactions idempotently
+- Prevent balance from dropping below 0
+- Handle race conditions
+
+## Evaluation Criteria
+
+- Functionality: Functions fulfill all requirements
+- Code Quality: Well-structured, readable, and maintainable code
+- Error Handling: Proper implementation of error handling and validation
+- Idempotency: Correct handling of idempotent keys
+- Race Conditions: Proper handling using DynamoDB transactions
+
+## Security Notes
+
+- Never commit AWS credentials to version control
+- Use IAM roles and policies with least privilege principle
+- Consider encrypting sensitive data at rest
+
+## Contributing
+
+1. Fork the repository
+2. Create your feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a new Pull Request
+
+## License
+
+This project is licensed under the ISC License.
