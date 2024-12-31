@@ -1,3 +1,11 @@
+import AWS from 'aws-sdk';
+import { DocumentClient } from 'aws-sdk/clients/dynamodb';
+const dynamoDb = new AWS.DynamoDB.DocumentClient({
+  region: 'us-east-1', // Update to your desired AWS region
+});
+
+const TRANSACTION_TABLE = 'Transactions';
+
 export const transact = async (input: {
   idempotentKey: string;
   userId: string;
@@ -22,5 +30,16 @@ export const transact = async (input: {
     throw new Error('Transaction type must be either "credit" or "debit"');
   }
 
-  // Placeholder for logic
+  const transactionParams: DocumentClient.GetItemInput = {
+    TableName: TRANSACTION_TABLE,
+    Key: { idempotentKey },
+  };
+
+  const transactionResult = await dynamoDb.get(transactionParams).promise();
+
+  if (transactionResult.Item) {
+    throw new Error(
+      'Duplicate transaction: This idempotentKey has already been used.',
+    );
+  }
 };
