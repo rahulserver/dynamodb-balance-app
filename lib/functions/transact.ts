@@ -5,6 +5,8 @@ const dynamoDb = new AWS.DynamoDB.DocumentClient({
 });
 
 const TRANSACTION_TABLE = 'Transactions';
+const BALANCE_TABLE = 'UserBalances';
+const DEFAULT_BALANCE = 100;
 
 export const transact = async (input: {
   idempotentKey: string;
@@ -41,5 +43,20 @@ export const transact = async (input: {
     throw new Error(
       'Duplicate transaction: This idempotentKey has already been used.',
     );
+  }
+
+  const balanceParams: DocumentClient.GetItemInput = {
+    TableName: BALANCE_TABLE,
+    Key: { userId },
+  };
+
+  const userBalance = await dynamoDb.get(balanceParams).promise();
+  const currentBalance = userBalance.Item?.balance ?? DEFAULT_BALANCE;
+
+  const newBalance =
+    type === 'credit' ? currentBalance + amount : currentBalance - amount;
+
+  if (newBalance < 0) {
+    throw new Error('Insufficient balance: Cannot process debit transaction.');
   }
 };
