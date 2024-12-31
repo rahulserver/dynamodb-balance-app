@@ -59,4 +59,33 @@ export const transact = async (input: {
   if (newBalance < 0) {
     throw new Error('Insufficient balance: Cannot process debit transaction.');
   }
+
+  const params: DocumentClient.TransactWriteItemsInput = {
+    TransactItems: [
+      {
+        Put: {
+          TableName: TRANSACTION_TABLE,
+          Item: {
+            idempotentKey,
+            userId,
+            amount,
+            type,
+            timestamp: new Date().toISOString(),
+          },
+        },
+      },
+      {
+        Update: {
+          TableName: BALANCE_TABLE,
+          Key: { userId },
+          UpdateExpression: 'SET balance = :newBalance',
+          ExpressionAttributeValues: {
+            ':newBalance': newBalance,
+          },
+        },
+      },
+    ],
+  };
+
+  await dynamoDb.transactWrite(params).promise();
 };
